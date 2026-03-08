@@ -83,10 +83,29 @@ def verify_interlocks_only(horiz_pieces, vert_pieces):
     return True
 
 
-# Verifica opzionale della montabilità (temporaneamente permissiva):
-# qualunque configurazione valida per incastro viene considerata assemblabile.
+def can_insert_column_prelock(horiz_pieces, vert_pieces, col_idx):
+    """Una colonna e inseribile durante il montaggio se scorre in tutte le righe."""
+    for row_idx in range(4):
+        h = horiz_pieces[row_idx][col_idx]
+        v = vert_pieces[col_idx][row_idx]
+        # Direzioni opposte e somma <= 4 per consentire scorrimento verticale.
+        if h[1] == v[1] or (h[0] + v[0] > 4):
+            return False
+    return True
+
+
+# Verifica opzionale della montabilità (v1):
+# una configurazione e assemblabile se gli incastri sono validi e almeno 3 colonne
+# risultano inseribili in pre-lock. La colonna rimanente viene considerata la colonna di chiusura.
 def verify_with_assembly(horiz_pieces, vert_pieces):
-    return verify_interlocks_only(horiz_pieces, vert_pieces)
+    if not verify_interlocks_only(horiz_pieces, vert_pieces):
+        return False
+
+    prelock_insertable = [
+        can_insert_column_prelock(horiz_pieces, vert_pieces, col_idx)
+        for col_idx in range(4)
+    ]
+    return sum(prelock_insertable) >= 3
 
 # Precompute variants
 VARIANTS = {pid: generate_variants(PIECES[pid]) for pid in PIECES}
@@ -166,14 +185,23 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
                         continue
 
                     valid_count += 1
-                    reached_valid_limit = max_solutions is not None and valid_count >= max_solutions
+                    elapsed_s = time.time() - start
 
                     if check_assembly:
                         is_assembleable = verify_with_assembly(horiz_pieces, vert_pieces)
                         if is_assembleable:
                             assembleable_count += 1
+                        assembleable_text = 'yes' if is_assembleable else 'no'
                     else:
                         is_assembleable = False
+                        assembleable_text = 'na'
+
+                    print(
+                        f"Valid solution found: iter={iter_count}, time={elapsed_s:.3f}s, "
+                        f"assembleable={assembleable_text}"
+                    )
+
+                    reached_valid_limit = max_solutions is not None and valid_count >= max_solutions
 
                     if check_assembly and not is_assembleable:
                         if reached_valid_limit:
@@ -193,7 +221,7 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
                         "depth1_last": last_vertical_id if has_depth_one(PIECES[last_vertical_id]) else None,
                         "last_vertical_id": last_vertical_id,
                         "iter": iter_count,
-                        "time_s": time.time() - start
+                        "time_s": elapsed_s
                     }
                     # print(f"Solution found after {iter_count} iterations in {solution['time_s']:.3f}s")
                     # print(json.dumps(solution, indent=2))
