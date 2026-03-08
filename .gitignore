@@ -1,0 +1,16 @@
+# Solver outputs
+results.json
+results*.json
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Common editor/system files
+.vscode/
+.DS_Store
+Thumbs.db
