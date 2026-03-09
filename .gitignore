@@ -1,6 +1,7 @@
 # Solver outputs
 results.json
 results*.json
+solution*.json
 
 # Python cache/bytecode
 __pycache__/
