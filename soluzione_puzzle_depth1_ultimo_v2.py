@@ -18,6 +18,7 @@ Nota:
 
 import argparse
 import json
+import os
 import time
 from itertools import permutations, product
 
@@ -115,6 +116,19 @@ def print_summary(valid_count, assembleable_count, returned_count):
     assembleable_text = 'na' if assembleable_count is None else str(assembleable_count)
     print(f"Summary: valid={valid_count}, assembleable={assembleable_text}, returned={returned_count}")
 
+
+def persist_results(save_all, results):
+    """Write results JSON whenever --save-all is provided (also when empty)."""
+    if not save_all:
+        return
+
+    out_dir = os.path.dirname(save_all)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    with open(save_all, 'w', encoding='utf-8') as fout:
+        json.dump(results, fout, indent=2)
+
 def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, force_depth1_last=True):
     start = time.time()
     pieces_ids = list(PIECES.keys())
@@ -161,6 +175,7 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
                     iter_count += 1
                     if max_iter and iter_count > max_iter:
                         print("Max iterations reached, exiting.")
+                        persist_results(save_all, results)
                         print_summary(valid_count, assembleable_count, len(results))
                         return results
 
@@ -203,13 +218,6 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
 
                     reached_valid_limit = max_solutions is not None and valid_count >= max_solutions
 
-                    if check_assembly and not is_assembleable:
-                        if reached_valid_limit:
-                            print(f"Reached max-solutions={max_solutions}.")
-                            print_summary(valid_count, assembleable_count, len(results))
-                            return results
-                        continue
-
                     solution = {
                         "horiz_ids": horiz_ids,
                         "horiz_vars": [variant_label(v) for v in horiz_vars],
@@ -226,15 +234,15 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
                     # print(f"Solution found after {iter_count} iterations in {solution['time_s']:.3f}s")
                     # print(json.dumps(solution, indent=2))
                     results.append(solution)
-                    if save_all:
-                        with open(save_all, 'w') as fout:
-                            json.dump(results, fout, indent=2)
+                    persist_results(save_all, results)
                     if reached_valid_limit:
                         print(f"Reached max-solutions={max_solutions}.")
+                        persist_results(save_all, results)
                         print_summary(valid_count, assembleable_count, len(results))
                         return results
 
     print("Search completed: no solution found with the current limits.")
+    persist_results(save_all, results)
     print_summary(valid_count, assembleable_count, len(results))
     return results
 

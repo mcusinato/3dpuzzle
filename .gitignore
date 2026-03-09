@@ -1,6 +1,5 @@
 # Solver outputs
-results.json
-results*.json
+result*.json
 solution*.json
 
 # Python cache/bytecode
