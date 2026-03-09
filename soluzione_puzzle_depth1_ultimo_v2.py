@@ -108,6 +108,134 @@ def verify_with_assembly(horiz_pieces, vert_pieces):
     ]
     return sum(prelock_insertable) >= 3
 
+
+def _simulate_alternating_sequence(
+    horiz_pieces,
+    vert_pieces,
+    movement_credit=0,
+    min_locked_cols_for_slack_check=2,
+):
+    """
+    Simula la sequenza H0->V0->H1->V1->H2->V2->H3->V3.
+
+    Regola aggiuntiva (slack): per inserire una colonna verticale con depth=3
+    su una riga gia vincolata, quella riga deve avere sufficiente gioco sulle
+    altre colonne gia montate. movement_credit allenta il vincolo (0 = severo).
+    """
+    h_placed = [False] * 4
+    v_placed = [False] * 4
+    grid_slack = [[None for _ in range(4)] for _ in range(4)]
+
+    def row_available_slack(row_idx, exclude_col):
+        slacks = []
+        for col in range(4):
+            if col == exclude_col:
+                continue
+            if v_placed[col] and grid_slack[row_idx][col] is not None:
+                slacks.append(grid_slack[row_idx][col])
+        if not slacks:
+            return float('inf')
+        return min(slacks)
+
+    sequence = []
+    for i in range(4):
+        sequence.append(('H', i))
+        sequence.append(('V', i))
+
+    for step_idx, (piece_type, idx) in enumerate(sequence, start=1):
+        if piece_type == 'H':
+            # Inserimento riga: deve interlockare con tutte le colonne gia presenti.
+            for col in range(4):
+                if not v_placed[col]:
+                    continue
+                h_slot = horiz_pieces[idx][col]
+                v_slot = vert_pieces[col][idx]
+                can_fit = fits(h_slot, v_slot)
+                if not can_fit:
+                    return False, {
+                        'blocked_step': step_idx,
+                        'blocked_piece_type': 'H',
+                        'blocked_piece_index': idx,
+                        'blocked_at_row': idx,
+                        'blocked_at_col': col,
+                        'reason': 'interlock_invalid'
+                    }
+
+            h_placed[idx] = True
+            for col in range(4):
+                if v_placed[col]:
+                    h_slot = horiz_pieces[idx][col]
+                    v_slot = vert_pieces[col][idx]
+                    grid_slack[idx][col] = (h_slot[0] + v_slot[0]) - 4
+
+        else:
+            # Inserimento colonna: interlock valido + gioco sufficiente sulle righe gia vincolate.
+            for row in range(4):
+                if not h_placed[row]:
+                    continue
+                h_slot = horiz_pieces[row][idx]
+                v_slot = vert_pieces[idx][row]
+                can_fit = fits(h_slot, v_slot)
+                if not can_fit:
+                    return False, {
+                        'blocked_step': step_idx,
+                        'blocked_piece_type': 'V',
+                        'blocked_piece_index': idx,
+                        'blocked_at_row': row,
+                        'blocked_at_col': idx,
+                        'reason': 'interlock_invalid'
+                    }
+
+                required_movement = max(0, v_slot[0] - 2 - movement_credit)
+                locked_cols_before_insert = sum(1 for placed in v_placed if placed)
+                should_check_slack = locked_cols_before_insert >= min_locked_cols_for_slack_check
+
+                if required_movement > 0 and should_check_slack:
+                    available = row_available_slack(row, idx)
+                    if available != float('inf') and required_movement > available:
+                        return False, {
+                            'blocked_step': step_idx,
+                            'blocked_piece_type': 'V',
+                            'blocked_piece_index': idx,
+                            'blocked_at_row': row,
+                            'blocked_at_col': idx,
+                            'reason': 'insufficient_slack',
+                            'required_movement': required_movement,
+                            'available_slack': available
+                        }
+
+            v_placed[idx] = True
+            for row in range(4):
+                if h_placed[row]:
+                    h_slot = horiz_pieces[row][idx]
+                    v_slot = vert_pieces[idx][row]
+                    grid_slack[row][idx] = (h_slot[0] + v_slot[0]) - 4
+
+    return True, None
+
+
+def verify_with_assembly_mode(
+    horiz_pieces,
+    vert_pieces,
+    mode='prelock',
+    movement_credit=0,
+    min_locked_cols_for_slack_check=2,
+):
+    if mode == 'prelock':
+        ok = verify_with_assembly(horiz_pieces, vert_pieces)
+        details = None if ok else {'reason': 'prelock_constraint_failed'}
+        return ok, details
+
+    if mode == 'sequence':
+        return _simulate_alternating_sequence(
+            horiz_pieces,
+            vert_pieces,
+            movement_credit=movement_credit,
+            min_locked_cols_for_slack_check=min_locked_cols_for_slack_check,
+        )
+
+    raise ValueError(f"Unknown assembly mode: {mode}")
+
 # Precompute variants
 VARIANTS = {pid: generate_variants(PIECES[pid]) for pid in PIECES}
 
@@ -129,7 +257,16 @@ def persist_results(save_all, results):
     with open(save_all, 'w', encoding='utf-8') as fout:
         json.dump(results, fout, indent=2)
 
-def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, force_depth1_last=True):
+def main(
+    max_iter=None,
+    save_all=None,
+    check_assembly=False,
+    max_solutions=1,
+    force_depth1_last=True,
+    assembly_mode='prelock',
+    assembly_movement_credit=0,
+    assembly_min_locked_cols=2,
+):
     start = time.time()
     pieces_ids = list(PIECES.keys())
     pieces_with_1 = [pid for pid in pieces_ids if has_depth_one(PIECES[pid])]
@@ -203,12 +340,19 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
                     elapsed_s = time.time() - start
 
                     if check_assembly:
-                        is_assembleable = verify_with_assembly(horiz_pieces, vert_pieces)
+                        is_assembleable, assembly_details = verify_with_assembly_mode(
+                            horiz_pieces,
+                            vert_pieces,
+                            mode=assembly_mode,
+                            movement_credit=assembly_movement_credit,
+                            min_locked_cols_for_slack_check=assembly_min_locked_cols,
+                        )
                         if is_assembleable:
                             assembleable_count += 1
                         assembleable_text = 'yes' if is_assembleable else 'no'
                     else:
                         is_assembleable = False
+                        assembly_details = None
                         assembleable_text = 'na'
 
                     print(
@@ -226,6 +370,8 @@ def main(max_iter=None, save_all=None, check_assembly=False, max_solutions=1, fo
                         "vert_vars": [variant_label(v) for v in vert_vars],
                         "vert_pieces": [[format_slot_for_output(slot) for slot in piece] for piece in vert_pieces],
                         "classification": "assembleable" if is_assembleable else "valid",
+                        "assembly_mode": assembly_mode if check_assembly else None,
+                        "assembly_details": assembly_details,
                         "depth1_last": last_vertical_id if has_depth_one(PIECES[last_vertical_id]) else None,
                         "last_vertical_id": last_vertical_id,
                         "iter": iter_count,
@@ -252,6 +398,25 @@ if __name__ == '__main__':
     parser.add_argument('--max-iter', type=int, default=None, help='Numero massimo di iterazioni da eseguire (utile per debug).')
     parser.add_argument('--save-all', type=str, default=None, help='File JSON dove salvare tutte le soluzioni trovate.')
     parser.add_argument('--check-assembly', action='store_true', help='Attiva anche il controllo di montabilità fisica (piu restrittivo).')
+    parser.add_argument(
+        '--assembly-mode',
+        type=str,
+        default='prelock',
+        choices=['prelock', 'sequence'],
+        help='Modalita controllo montabilita: prelock (legacy) o sequence (simula H0,V0,H1,V1,...)',
+    )
+    parser.add_argument(
+        '--assembly-movement-credit',
+        type=int,
+        default=0,
+        help='Allenta il vincolo di movimento nel mode=sequence (0 = severo, valori piu alti = meno restrittivo).',
+    )
+    parser.add_argument(
+        '--assembly-min-locked-cols',
+        type=int,
+        default=2,
+        help='Nel mode=sequence applica il vincolo slack solo quando sono gia montate almeno N colonne verticali.',
+    )
     parser.add_argument('--max-solutions', type=int, default=1, help='Numero massimo di soluzioni da trovare prima di fermarsi (usa valori >1 per cercare piu combinazioni).')
     parser.add_argument('--force-depth1-last', dest='force_depth1_last', action='store_true', default=True, help='Forza un pezzo con depth=1 come ultimo verticale (default).')
     parser.add_argument('--allow-any-last', dest='force_depth1_last', action='store_false', help='Non forzare depth=1 ultimo; prova qualunque pezzo come ultimo verticale.')
@@ -262,6 +427,9 @@ if __name__ == '__main__':
         check_assembly=args.check_assembly,
         max_solutions=args.max_solutions,
         force_depth1_last=args.force_depth1_last,
+        assembly_mode=args.assembly_mode,
+        assembly_movement_credit=args.assembly_movement_credit,
+        assembly_min_locked_cols=args.assembly_min_locked_cols,
     )
     #if res:
     #    print(f"Found {len(res)} valid solution(s).")
