@@ -214,27 +214,13 @@ def _simulate_alternating_sequence(
     return True, None
 
 
-def verify_with_assembly_mode(
-    horiz_pieces,
-    vert_pieces,
-    mode='prelock',
-    movement_credit=0,
-    min_locked_cols_for_slack_check=2,
-):
-    if mode == 'prelock':
-        ok = verify_with_assembly(horiz_pieces, vert_pieces)
-        details = None if ok else {'reason': 'prelock_constraint_failed'}
-        return ok, details
-
-    if mode == 'sequence':
-        return _simulate_alternating_sequence(
-            horiz_pieces,
-            vert_pieces,
-            movement_credit=movement_credit,
-            min_locked_cols_for_slack_check=min_locked_cols_for_slack_check,
-        )
-
-    raise ValueError(f"Unknown assembly mode: {mode}")
+def verify_with_assembly_sequence(horiz_pieces, vert_pieces):
+    return _simulate_alternating_sequence(
+        horiz_pieces,
+        vert_pieces,
+        movement_credit=0,
+        min_locked_cols_for_slack_check=2,
+    )
 
 # Precompute variants
 VARIANTS = {pid: generate_variants(PIECES[pid]) for pid in PIECES}
@@ -263,9 +249,6 @@ def main(
     check_assembly=False,
     max_solutions=1,
     force_depth1_last=True,
-    assembly_mode='prelock',
-    assembly_movement_credit=0,
-    assembly_min_locked_cols=2,
 ):
     start = time.time()
     pieces_ids = list(PIECES.keys())
@@ -340,12 +323,9 @@ def main(
                     elapsed_s = time.time() - start
 
                     if check_assembly:
-                        is_assembleable, assembly_details = verify_with_assembly_mode(
+                        is_assembleable, assembly_details = verify_with_assembly_sequence(
                             horiz_pieces,
                             vert_pieces,
-                            mode=assembly_mode,
-                            movement_credit=assembly_movement_credit,
-                            min_locked_cols_for_slack_check=assembly_min_locked_cols,
                         )
                         if is_assembleable:
                             assembleable_count += 1
@@ -370,7 +350,7 @@ def main(
                         "vert_vars": [variant_label(v) for v in vert_vars],
                         "vert_pieces": [[format_slot_for_output(slot) for slot in piece] for piece in vert_pieces],
                         "classification": "assembleable" if is_assembleable else "valid",
-                        "assembly_mode": assembly_mode if check_assembly else None,
+                        "assembly_mode": "sequence" if check_assembly else None,
                         "assembly_details": assembly_details,
                         "depth1_last": last_vertical_id if has_depth_one(PIECES[last_vertical_id]) else None,
                         "last_vertical_id": last_vertical_id,
@@ -397,26 +377,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Ricerca soluzione puzzle, con depth=1 ultimo.')
     parser.add_argument('--max-iter', type=int, default=None, help='Numero massimo di iterazioni da eseguire (utile per debug).')
     parser.add_argument('--save-all', type=str, default=None, help='File JSON dove salvare tutte le soluzioni trovate.')
-    parser.add_argument('--check-assembly', action='store_true', help='Attiva anche il controllo di montabilità fisica (piu restrittivo).')
-    parser.add_argument(
-        '--assembly-mode',
-        type=str,
-        default='prelock',
-        choices=['prelock', 'sequence'],
-        help='Modalita controllo montabilita: prelock (legacy) o sequence (simula H0,V0,H1,V1,...)',
-    )
-    parser.add_argument(
-        '--assembly-movement-credit',
-        type=int,
-        default=0,
-        help='Allenta il vincolo di movimento nel mode=sequence (0 = severo, valori piu alti = meno restrittivo).',
-    )
-    parser.add_argument(
-        '--assembly-min-locked-cols',
-        type=int,
-        default=2,
-        help='Nel mode=sequence applica il vincolo slack solo quando sono gia montate almeno N colonne verticali.',
-    )
+    parser.add_argument('--check-assembly', action='store_true', help='Attiva il controllo di montabilità fisica con simulazione sequence (H0,V0,H1,V1,...).')
     parser.add_argument('--max-solutions', type=int, default=1, help='Numero massimo di soluzioni da trovare prima di fermarsi (usa valori >1 per cercare piu combinazioni).')
     parser.add_argument('--force-depth1-last', dest='force_depth1_last', action='store_true', default=True, help='Forza un pezzo con depth=1 come ultimo verticale (default).')
     parser.add_argument('--allow-any-last', dest='force_depth1_last', action='store_false', help='Non forzare depth=1 ultimo; prova qualunque pezzo come ultimo verticale.')
@@ -427,9 +388,6 @@ if __name__ == '__main__':
         check_assembly=args.check_assembly,
         max_solutions=args.max_solutions,
         force_depth1_last=args.force_depth1_last,
-        assembly_mode=args.assembly_mode,
-        assembly_movement_credit=args.assembly_movement_credit,
-        assembly_min_locked_cols=args.assembly_min_locked_cols,
     )
     #if res:
     #    print(f"Found {len(res)} valid solution(s).")
