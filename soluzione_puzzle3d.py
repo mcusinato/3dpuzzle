@@ -145,6 +145,199 @@ def verify_with_assembly(horiz_pieces, vert_pieces):
     return sum(prelock_insertable) >= 3
 
 
+def _node_index(piece_type, idx):
+    return idx if piece_type == 'H' else 4 + idx
+
+
+def _directional_mobility_limits(horiz_pieces, vert_pieces, h_placed, v_placed):
+    inf = float('inf')
+    h_limits = [{'up': inf, 'down': inf} for _ in range(4)]
+    v_limits = [{'up': inf, 'down': inf} for _ in range(4)]
+
+    for row in range(4):
+        if not h_placed[row]:
+            continue
+        for col in range(4):
+            if not v_placed[col]:
+                continue
+
+            h_slot = horiz_pieces[row][col]
+            v_slot = vert_pieces[col][row]
+            depth_slack = h_slot[0] + v_slot[0] - 4
+
+            if h_slot[1] == '_' and v_slot[1] == '^':
+                h_limits[row]['down'] = min(h_limits[row]['down'], depth_slack)
+                v_limits[col]['up'] = min(v_limits[col]['up'], depth_slack)
+            elif h_slot[1] == '^' and v_slot[1] == '_':
+                h_limits[row]['up'] = min(h_limits[row]['up'], depth_slack)
+                v_limits[col]['down'] = min(v_limits[col]['down'], depth_slack)
+
+    return h_limits, v_limits
+
+
+def _build_relative_shift_bounds(horiz_pieces, vert_pieces, h_placed, v_placed):
+    inf = float('inf')
+    n = 8
+    dist = [[inf] * n for _ in range(n)]
+    for i in range(n):
+        dist[i][i] = 0
+
+    def add_constraint(u, v, w):
+        if w < dist[v][u]:
+            dist[v][u] = w
+
+    for row in range(4):
+        if not h_placed[row]:
+            continue
+        for col in range(4):
+            if not v_placed[col]:
+                continue
+
+            h_slot = horiz_pieces[row][col]
+            v_slot = vert_pieces[col][row]
+            slack = h_slot[0] + v_slot[0] - 4
+
+            h_node = _node_index('H', row)
+            v_node = _node_index('V', col)
+
+            if h_slot[1] == '^' and v_slot[1] == '_':
+                add_constraint(h_node, v_node, slack)
+            elif h_slot[1] == '_' and v_slot[1] == '^':
+                add_constraint(v_node, h_node, slack)
+
+    for k in range(n):
+        for i in range(n):
+            dik = dist[i][k]
+            if dik == inf:
+                continue
+            row_i = dist[i]
+            row_k = dist[k]
+            for j in range(n):
+                alt = dik + row_k[j]
+                if alt < row_i[j]:
+                    row_i[j] = alt
+
+    return dist
+
+
+def _max_relative_shift(piece_up, piece_down, dist):
+    up_type, up_idx = piece_up
+    down_type, down_idx = piece_down
+    up_node = _node_index(up_type, up_idx)
+    down_node = _node_index(down_type, down_idx)
+    return dist[down_node][up_node]
+
+
+def _depth_movement_demand(depth):
+    return max(0, 4 - depth)
+
+
+def _opposite_piece_motion_dir(slot_direction):
+    return 'up' if slot_direction == '^' else 'down'
+
+
+def _check_piece_insertion(piece_type, idx, horiz_pieces, vert_pieces, h_placed, v_placed):
+    demands = []
+
+    if piece_type == 'H':
+        for col in range(4):
+            if not v_placed[col]:
+                continue
+
+            h_slot = horiz_pieces[idx][col]
+            v_slot = vert_pieces[col][idx]
+            if not fits(h_slot, v_slot):
+                return False, {
+                    'reason': 'interlock_invalid',
+                    'blocked_at_row': idx,
+                    'blocked_at_col': col,
+                    'required_spread': 'na',
+                    'available_spread': 'na',
+                    'worst_block': None,
+                }
+
+            demands.append({
+                'opp_type': 'V',
+                'opp_idx': col,
+                'demand': _depth_movement_demand(h_slot[0]),
+                'motion_dir': _opposite_piece_motion_dir(h_slot[1]),
+            })
+
+    else:
+        for row in range(4):
+            if not h_placed[row]:
+                continue
+
+            h_slot = horiz_pieces[row][idx]
+            v_slot = vert_pieces[idx][row]
+            if not fits(h_slot, v_slot):
+                return False, {
+                    'reason': 'interlock_invalid',
+                    'blocked_at_row': row,
+                    'blocked_at_col': idx,
+                    'required_spread': 'na',
+                    'available_spread': 'na',
+                    'worst_block': None,
+                }
+
+            demands.append({
+                'opp_type': 'H',
+                'opp_idx': row,
+                'demand': _depth_movement_demand(v_slot[0]),
+                'motion_dir': _opposite_piece_motion_dir(v_slot[1]),
+            })
+
+    pair_required_values = []
+    pair_available_values = []
+    worst_block = None
+    dist_bounds = _build_relative_shift_bounds(horiz_pieces, vert_pieces, h_placed, v_placed)
+
+    for i in range(len(demands)):
+        for j in range(i + 1, len(demands)):
+            a = demands[i]
+            b = demands[j]
+            if a['motion_dir'] == b['motion_dir']:
+                continue
+
+            required = a['demand'] + b['demand']
+            if a['motion_dir'] == 'up' and b['motion_dir'] == 'down':
+                available = _max_relative_shift(
+                    (a['opp_type'], a['opp_idx']),
+                    (b['opp_type'], b['opp_idx']),
+                    dist_bounds,
+                )
+            else:
+                available = _max_relative_shift(
+                    (b['opp_type'], b['opp_idx']),
+                    (a['opp_type'], a['opp_idx']),
+                    dist_bounds,
+                )
+
+            pair_required_values.append(required)
+            pair_available_values.append(available)
+
+            if available < required:
+                if worst_block is None or (required - available) > worst_block['gap']:
+                    worst_block = {
+                        'gap': required - available,
+                        'a': a,
+                        'b': b,
+                        'required': required,
+                        'available': available,
+                    }
+
+    summary_required = max(pair_required_values) if pair_required_values else 0
+    summary_available = min(pair_available_values) if pair_available_values else 'na'
+
+    return worst_block is None, {
+        'reason': None if worst_block is None else 'insufficient_vertical_spread',
+        'required_spread': summary_required,
+        'available_spread': summary_available,
+        'worst_block': worst_block,
+        'demands': demands,
+    }
+
+
 def _simulate_alternating_sequence(
     horiz_pieces,
     vert_pieces,
@@ -201,6 +394,81 @@ def _simulate_alternating_sequence(
 
         return h_limits, v_limits
 
+    def _node_index(piece_type, idx):
+        return idx if piece_type == 'H' else 4 + idx
+
+    def _build_relative_shift_bounds():
+        """
+        Costruisce bounds globali tra pezzi gia montati usando vincoli lineari
+        di differenza del tipo x_u - x_v <= w.
+
+        Variabili:
+        - x_Hi per orizzontali
+        - x_Vj per verticali
+
+        Da ciascun contatto gia montato (row, col), con slack s:
+        - H '^' vs V '_'  => x_H - x_V <= s
+        - H '_' vs V '^'  => x_V - x_H <= s
+
+        Ritorna una matrice dist dove dist[a][b] e il bound minimo su
+        x_b - x_a. Quindi il massimo di x_b - x_a e dist[a][b].
+        """
+        inf = float('inf')
+        n = 8
+        dist = [[inf] * n for _ in range(n)]
+        for i in range(n):
+            dist[i][i] = 0
+
+        def add_constraint(u, v, w):
+            # x_u - x_v <= w  <=>  x_u <= x_v + w  (edge v -> u, weight w)
+            if w < dist[v][u]:
+                dist[v][u] = w
+
+        for row in range(4):
+            if not h_placed[row]:
+                continue
+            for col in range(4):
+                if not v_placed[col]:
+                    continue
+
+                h_slot = horiz_pieces[row][col]
+                v_slot = vert_pieces[col][row]
+                slack = h_slot[0] + v_slot[0] - 4
+
+                h_node = _node_index('H', row)
+                v_node = _node_index('V', col)
+
+                if h_slot[1] == '^' and v_slot[1] == '_':
+                    add_constraint(h_node, v_node, slack)
+                elif h_slot[1] == '_' and v_slot[1] == '^':
+                    add_constraint(v_node, h_node, slack)
+
+        # Floyd-Warshall sui bounds differenziali.
+        for k in range(n):
+            for i in range(n):
+                dik = dist[i][k]
+                if dik == inf:
+                    continue
+                row_i = dist[i]
+                row_k = dist[k]
+                for j in range(n):
+                    alt = dik + row_k[j]
+                    if alt < row_i[j]:
+                        row_i[j] = alt
+
+        return dist
+
+    def _max_relative_shift(piece_up, piece_down, dist):
+        """
+        Massimo spread disponibile tra due pezzi opposti:
+        max(x_up - x_down), coerente con "up" per il primo e "down" per il secondo.
+        """
+        up_type, up_idx = piece_up
+        down_type, down_idx = piece_down
+        up_node = _node_index(up_type, up_idx)
+        down_node = _node_index(down_type, down_idx)
+        return dist[down_node][up_node]
+
     def depth_movement_demand(depth):
         """
         Domanda di spostamento introdotta dal buco del pezzo in inserimento.
@@ -212,7 +480,7 @@ def _simulate_alternating_sequence(
 
     def opposite_piece_motion_dir(slot_direction):
         """Direzione richiesta al pezzo opposto per facilitare l'inserimento."""
-        return 'down' if slot_direction == '^' else 'up'
+        return 'up' if slot_direction == '^' else 'down'
 
     def pairwise_shift_check_for_insertion(piece_type, idx, h_limits, v_limits):
         """
@@ -224,6 +492,7 @@ def _simulate_alternating_sequence(
         Restituisce (ok, details).
         """
         demands = []
+        dist_bounds = _build_relative_shift_bounds()
 
         if piece_type == 'V':
             for row in range(4):
@@ -232,13 +501,11 @@ def _simulate_alternating_sequence(
                 v_slot = vert_pieces[idx][row]
                 demand = depth_movement_demand(v_slot[0])
                 motion_dir = opposite_piece_motion_dir(v_slot[1])
-                capacity = h_limits[row][motion_dir]
                 demands.append({
                     'opp_type': 'H',
                     'opp_idx': row,
                     'demand': demand,
                     'motion_dir': motion_dir,
-                    'capacity': capacity,
                 })
         else:
             for col in range(4):
@@ -247,13 +514,11 @@ def _simulate_alternating_sequence(
                 h_slot = horiz_pieces[idx][col]
                 demand = depth_movement_demand(h_slot[0])
                 motion_dir = opposite_piece_motion_dir(h_slot[1])
-                capacity = v_limits[col][motion_dir]
                 demands.append({
                     'opp_type': 'V',
                     'opp_idx': col,
                     'demand': demand,
                     'motion_dir': motion_dir,
-                    'capacity': capacity,
                 })
 
         pair_required_values = []
@@ -270,7 +535,18 @@ def _simulate_alternating_sequence(
                     continue
 
                 required = a['demand'] + b['demand']
-                available = a['capacity'] + b['capacity']
+                if a['motion_dir'] == 'up' and b['motion_dir'] == 'down':
+                    available = _max_relative_shift(
+                        (a['opp_type'], a['opp_idx']),
+                        (b['opp_type'], b['opp_idx']),
+                        dist_bounds,
+                    )
+                else:
+                    available = _max_relative_shift(
+                        (b['opp_type'], b['opp_idx']),
+                        (a['opp_type'], a['opp_idx']),
+                        dist_bounds,
+                    )
 
                 pair_required_values.append(required)
                 pair_available_values.append(available)
@@ -329,6 +605,7 @@ def _simulate_alternating_sequence(
                         'blocked_at_row': idx,
                         'blocked_at_col': col,
                         'reason': 'interlock_invalid',
+                        'max_completed_steps': step_idx - 1,
                         'trace_steps': trace_steps if capture_trace else None,
                     }
 
@@ -355,6 +632,7 @@ def _simulate_alternating_sequence(
                     'required_spread': pairwise_details['required_spread'],
                     'available_spread': pairwise_details['available_spread'],
                     'pair_block': pairwise_details['worst_block'],
+                    'max_completed_steps': step_idx - 1,
                     'trace_steps': trace_steps if capture_trace else None,
                 }
 
@@ -401,6 +679,7 @@ def _simulate_alternating_sequence(
                         'blocked_at_row': row,
                         'blocked_at_col': idx,
                         'reason': 'interlock_invalid',
+                        'max_completed_steps': step_idx - 1,
                         'trace_steps': trace_steps if capture_trace else None,
                     }
 
@@ -410,13 +689,19 @@ def _simulate_alternating_sequence(
             required_spread = max(0, pairwise_details['required_spread'] - movement_credit)
             available_spread = pairwise_details['available_spread']
 
-            if available_spread != 'na' and available_spread < required_spread:
+            # Nota: il check di fattibilita va fatto coppia-per-coppia (pairwise_ok).
+            # Confrontare max(required) con min(available) su coppie diverse puo
+            # generare falsi negativi.
+            if not pairwise_ok:
+                worst_block = pairwise_details['worst_block']
+                blocked_required = worst_block['required'] if worst_block else required_spread
+                blocked_available = worst_block['available'] if worst_block else available_spread
                 if capture_trace:
                     trace_steps.append({
                         'step': step_idx,
                         'piece': f'V{idx}',
-                        'required_spread': required_spread,
-                        'available_spread': available_spread,
+                        'required_spread': blocked_required,
+                        'available_spread': blocked_available,
                         'status': 'blocked',
                         'reason': 'insufficient_vertical_spread',
                         'h_limits': h_limits_before,
@@ -427,9 +712,10 @@ def _simulate_alternating_sequence(
                     'blocked_piece_type': 'V',
                     'blocked_piece_index': idx,
                     'reason': 'insufficient_vertical_spread',
-                    'required_spread': required_spread,
-                    'available_spread': available_spread,
-                    'pair_block': pairwise_details['worst_block'],
+                    'required_spread': blocked_required,
+                    'available_spread': blocked_available,
+                    'pair_block': worst_block,
+                    'max_completed_steps': step_idx - 1,
                     'trace_steps': trace_steps if capture_trace else None,
                 }
 
@@ -447,7 +733,11 @@ def _simulate_alternating_sequence(
                     'v_limits': v_limits,
                 })
 
-    return (True, {'trace_steps': trace_steps}) if capture_trace else (True, None)
+    details = {
+        'max_completed_steps': 8,
+        'trace_steps': trace_steps if capture_trace else None,
+    }
+    return True, details
 
 
 def verify_with_assembly_sequence(horiz_pieces, vert_pieces, capture_trace=False):
@@ -458,6 +748,105 @@ def verify_with_assembly_sequence(horiz_pieces, vert_pieces, capture_trace=False
         min_locked_cols_for_slack_check=2,
         capture_trace=capture_trace,
     )
+
+
+def verify_with_assembly_dynamic(horiz_pieces, vert_pieces, capture_trace=False):
+    if not verify_interlocks_only(horiz_pieces, vert_pieces):
+        return False, {
+            'reason': 'interlock_invalid',
+            'max_completed_steps': 0,
+            'trace_steps': [] if capture_trace else None,
+        }
+
+    failed_states = set()
+
+    def recurse(h_placed, v_placed, step_idx, trace_steps):
+        completed_steps = sum(1 for placed in h_placed if placed) + sum(1 for placed in v_placed if placed)
+        if all(h_placed) and all(v_placed):
+            return True, {
+                'max_completed_steps': 8,
+                'trace_steps': trace_steps if capture_trace else None,
+            }, 8
+
+        state_key = (tuple(h_placed), tuple(v_placed))
+        if state_key in failed_states:
+            return False, None, completed_steps
+
+        candidates = []
+
+        for row in range(4):
+            if h_placed[row]:
+                continue
+            ok, details = _check_piece_insertion('H', row, horiz_pieces, vert_pieces, h_placed, v_placed)
+            if ok:
+                margin = float('inf') if details['available_spread'] == 'na' else details['available_spread'] - details['required_spread']
+                candidates.append(('H', row, details, margin))
+
+        for col in range(4):
+            if v_placed[col]:
+                continue
+            ok, details = _check_piece_insertion('V', col, horiz_pieces, vert_pieces, h_placed, v_placed)
+            if ok:
+                margin = float('inf') if details['available_spread'] == 'na' else details['available_spread'] - details['required_spread']
+                candidates.append(('V', col, details, margin))
+
+        if not candidates:
+            failed_states.add(state_key)
+            return False, None, completed_steps
+
+        def score(candidate):
+            piece_type, idx, details, margin = candidate
+            connected = sum(v_placed) if piece_type == 'H' else sum(h_placed)
+            finite_margin = margin if margin != float('inf') else 10**9
+            return (-connected, finite_margin, piece_type, idx)
+
+        candidates.sort(key=score)
+
+        best_failed_steps = completed_steps
+        for piece_type, idx, details, _ in candidates:
+            next_h = h_placed[:]
+            next_v = v_placed[:]
+            if piece_type == 'H':
+                next_h[idx] = True
+            else:
+                next_v[idx] = True
+
+            next_trace = trace_steps
+            if capture_trace:
+                h_limits, v_limits = _directional_mobility_limits(
+                    horiz_pieces,
+                    vert_pieces,
+                    next_h,
+                    next_v,
+                )
+                next_trace = trace_steps + [{
+                    'step': step_idx,
+                    'piece': f'{piece_type}{idx}',
+                    'required_spread': details['required_spread'],
+                    'available_spread': details['available_spread'],
+                    'status': 'ok',
+                    'h_limits': h_limits,
+                    'v_limits': v_limits,
+                }]
+
+            ok, out_details, branch_steps = recurse(next_h, next_v, step_idx + 1, next_trace)
+            if ok:
+                return True, out_details, 8
+            if branch_steps > best_failed_steps:
+                best_failed_steps = branch_steps
+
+        failed_states.add(state_key)
+        return False, None, best_failed_steps
+
+    is_ok, details, best_steps = recurse([False] * 4, [False] * 4, 1, [])
+    if is_ok:
+        return True, details
+
+    return False, {
+        'reason': 'no_feasible_sequence',
+        'max_completed_steps': best_steps,
+        'trace_steps': details['trace_steps'] if (capture_trace and details) else ([] if capture_trace else None),
+    }
 
 # Precompute variants
 VARIANTS = {pid: generate_variants(PIECES[pid]) for pid in PIECES}
@@ -484,6 +873,8 @@ def main(
     max_iter=None,
     save_all=None,
     check_assembly=False,
+    assembly_search='sequence',
+    print_valid=False,
     assembly_trace=False,
     max_solutions=1,
     force_depth1_last=True,
@@ -561,11 +952,32 @@ def main(
                     elapsed_s = time.time() - start
 
                     if check_assembly:
-                        is_assembleable, assembly_details = verify_with_assembly_sequence(
-                            horiz_pieces,
-                            vert_pieces,
-                            capture_trace=assembly_trace,
-                        )
+                        sequence_steps = None
+                        dynamic_extra_step = None
+                        if assembly_search == 'dynamic':
+                            is_assembleable, assembly_details = verify_with_assembly_dynamic(
+                                horiz_pieces,
+                                vert_pieces,
+                                capture_trace=assembly_trace,
+                            )
+                            seq_is_assembleable, seq_details = verify_with_assembly_sequence(
+                                horiz_pieces,
+                                vert_pieces,
+                                capture_trace=False,
+                            )
+                            sequence_steps = 8 if seq_is_assembleable else seq_details.get('max_completed_steps', 0)
+                            dynamic_steps = 8 if is_assembleable else assembly_details.get('max_completed_steps', 0)
+                            dynamic_extra_step = dynamic_steps >= (sequence_steps + 1)
+                            if assembly_details is None:
+                                assembly_details = {}
+                            assembly_details['sequence_max_completed_steps'] = sequence_steps
+                            assembly_details['dynamic_adds_step_vs_sequence'] = dynamic_extra_step
+                        else:
+                            is_assembleable, assembly_details = verify_with_assembly_sequence(
+                                horiz_pieces,
+                                vert_pieces,
+                                capture_trace=assembly_trace,
+                            )
                         if is_assembleable:
                             assembleable_count += 1
                         assembleable_text = 'yes' if is_assembleable else 'no'
@@ -573,21 +985,33 @@ def main(
                         is_assembleable = False
                         assembly_details = None
                         assembleable_text = 'na'
+                        dynamic_extra_step = None
 
-                    print(
-                        f"Valid solution found: iter={iter_count}, time={elapsed_s:.3f}s, "
-                        f"assembleable={assembleable_text}"
-                    )
-                    print_systematic_solution(
-                        horiz_ids,
-                        horiz_vars,
-                        horiz_pieces,
-                        vert_ids,
-                        vert_vars,
-                        vert_pieces,
-                    )
-                    if check_assembly and assembly_trace and assembly_details and assembly_details.get('trace_steps'):
-                        print_assembly_trace(assembly_details['trace_steps'])
+                    should_print_solution = print_valid or ((not check_assembly) or is_assembleable)
+                    if should_print_solution:
+                        headline = (
+                            f"Valid solution found: iter={iter_count}, time={elapsed_s:.3f}s, "
+                            f"assembleable={assembleable_text}"
+                        )
+                        if check_assembly and assembly_search == 'dynamic' and dynamic_extra_step is not None:
+                            extra_text = 'yes' if dynamic_extra_step else 'no'
+                            dynamic_steps = 8 if is_assembleable else assembly_details.get('max_completed_steps', 0)
+                            sequence_steps = assembly_details.get('sequence_max_completed_steps', 0)
+                            headline += (
+                                f", dynamic_adds_step_vs_sequence={extra_text}"
+                                f" (dynamic_steps={dynamic_steps}, sequence_steps={sequence_steps})"
+                            )
+                        print(headline)
+                        print_systematic_solution(
+                            horiz_ids,
+                            horiz_vars,
+                            horiz_pieces,
+                            vert_ids,
+                            vert_vars,
+                            vert_pieces,
+                        )
+                        if check_assembly and assembly_trace and assembly_details and assembly_details.get('trace_steps'):
+                            print_assembly_trace(assembly_details['trace_steps'])
 
                     reached_valid_limit = max_solutions is not None and valid_count >= max_solutions
 
@@ -599,7 +1023,7 @@ def main(
                         "vert_vars": [variant_label(v) for v in vert_vars],
                         "vert_pieces": [[format_slot_for_output(slot) for slot in piece] for piece in vert_pieces],
                         "classification": "assembleable" if is_assembleable else "valid",
-                        "assembly_mode": "sequence" if check_assembly else None,
+                        "assembly_mode": assembly_search if check_assembly else None,
                         "assembly_details": assembly_details,
                         "depth1_last": last_vertical_id if has_depth_one(PIECES[last_vertical_id]) else None,
                         "last_vertical_id": last_vertical_id,
@@ -627,15 +1051,26 @@ if __name__ == '__main__':
     parser.add_argument('--max-iter', type=int, default=None, help='Numero massimo di iterazioni da eseguire (utile per debug).')
     parser.add_argument('--save-all', type=str, default=None, help='File JSON dove salvare tutte le soluzioni trovate.')
     parser.add_argument('--check-assembly', action='store_true', help='Attiva il controllo di montabilità fisica con simulazione sequence (H0,V0,H1,V1,...).')
+    parser.add_argument('--assembly-check', type=str, choices=['sequence', 'dynamic'], default=None, help='Alias compatto: abilita il check assembly scegliendo la modalita.')
+    parser.add_argument('--assembly-search', type=str, choices=['sequence', 'dynamic'], default='sequence', help='Modalita controllo montabilita: sequence (fissa H0,V0,...) o dynamic (ricerca ordine con backtracking).')
+    parser.add_argument('--print-valid', action='store_true', help='Stampa ogni soluzione valida (non solo quelle assemblabili).')
     parser.add_argument('--assembly-trace', action='store_true', help='Stampa i limiti di movimento up/down passo-passo durante --check-assembly.')
     parser.add_argument('--max-solutions', type=int, default=1, help='Numero massimo di soluzioni da trovare prima di fermarsi (usa valori >1 per cercare piu combinazioni).')
     parser.add_argument('--force-depth1-last', dest='force_depth1_last', action='store_true', default=True, help='Forza un pezzo con depth=1 come ultimo verticale (default).')
     parser.add_argument('--allow-any-last', dest='force_depth1_last', action='store_false', help='Non forzare depth=1 ultimo; prova qualunque pezzo come ultimo verticale.')
     args = parser.parse_args()
+    effective_check_assembly = args.check_assembly
+    effective_assembly_search = args.assembly_search
+    if args.assembly_check is not None:
+        effective_check_assembly = True
+        effective_assembly_search = args.assembly_check
+
     res = main(
         max_iter=args.max_iter,
         save_all=args.save_all,
-        check_assembly=args.check_assembly,
+        check_assembly=effective_check_assembly,
+        assembly_search=effective_assembly_search,
+        print_valid=args.print_valid,
         assembly_trace=args.assembly_trace,
         max_solutions=args.max_solutions,
         force_depth1_last=args.force_depth1_last,
