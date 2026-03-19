@@ -848,6 +848,82 @@ def verify_with_assembly_dynamic(horiz_pieces, vert_pieces, capture_trace=False)
         'trace_steps': details['trace_steps'] if (capture_trace and details) else ([] if capture_trace else None),
     }
 
+
+def verify_subset_h1h2_v1v2_dynamic(horiz_pieces, vert_pieces, capture_trace=False):
+    """
+    Verifica se i soli 4 pezzi H1, H2, V1, V2 possono essere montati in almeno
+    un ordine (qualunque) ignorando completamente gli altri 4 pezzi.
+    """
+    target_order_items = [('H', 1), ('H', 2), ('V', 1), ('V', 2)]
+    best_failed_steps = -1
+    best_failed_order = None
+
+    for candidate_order in permutations(target_order_items, 4):
+        h_placed = [False] * 4
+        v_placed = [False] * 4
+        trace_steps = []
+        max_completed_steps = 0
+        blocked_details = None
+
+        is_order_ok = True
+        for step_idx, (piece_type, idx) in enumerate(candidate_order, start=1):
+            ok, details = _check_piece_insertion(
+                piece_type,
+                idx,
+                horiz_pieces,
+                vert_pieces,
+                h_placed,
+                v_placed,
+            )
+            if not ok:
+                is_order_ok = False
+                blocked_details = details
+                break
+
+            if piece_type == 'H':
+                h_placed[idx] = True
+            else:
+                v_placed[idx] = True
+            max_completed_steps = step_idx
+
+            if capture_trace:
+                h_limits, v_limits = _directional_mobility_limits(
+                    horiz_pieces,
+                    vert_pieces,
+                    h_placed,
+                    v_placed,
+                )
+                trace_steps.append({
+                    'step': step_idx,
+                    'piece': f'{piece_type}{idx}',
+                    'required_spread': details['required_spread'],
+                    'available_spread': details['available_spread'],
+                    'status': 'ok',
+                    'h_limits': h_limits,
+                    'v_limits': v_limits,
+                })
+
+        if is_order_ok:
+            return True, {
+                'reason': None,
+                'max_completed_steps': 4,
+                'subset_piece_labels': ['H1', 'H2', 'V1', 'V2'],
+                'successful_order': [f'{p}{i}' for p, i in candidate_order],
+                'trace_steps': trace_steps if capture_trace else None,
+            }
+
+        if max_completed_steps > best_failed_steps:
+            best_failed_steps = max_completed_steps
+            best_failed_order = candidate_order
+
+    return False, {
+        'reason': 'no_feasible_subset_order',
+        'max_completed_steps': max(0, best_failed_steps),
+        'subset_piece_labels': ['H1', 'H2', 'V1', 'V2'],
+        'best_failed_order': [f'{p}{i}' for p, i in best_failed_order] if best_failed_order else None,
+        'trace_steps': [] if capture_trace else None,
+    }
+
 # Precompute variants
 VARIANTS = {pid: generate_variants(PIECES[pid]) for pid in PIECES}
 
@@ -874,6 +950,7 @@ def main(
     save_all=None,
     check_assembly=False,
     assembly_search='sequence',
+    check_subset_h1h2_v1v2=False,
     print_valid=False,
     assembly_trace=False,
     max_solutions=1,
@@ -987,12 +1064,27 @@ def main(
                         assembleable_text = 'na'
                         dynamic_extra_step = None
 
+                    if check_subset_h1h2_v1v2:
+                        subset_ok, subset_details = verify_subset_h1h2_v1v2_dynamic(
+                            horiz_pieces,
+                            vert_pieces,
+                            capture_trace=False,
+                        )
+                        if not subset_ok:
+                            continue
+                    else:
+                        subset_ok = None
+                        subset_details = None
+
                     should_print_solution = print_valid or ((not check_assembly) or is_assembleable)
                     if should_print_solution:
                         headline = (
                             f"Valid solution found: iter={iter_count}, time={elapsed_s:.3f}s, "
                             f"assembleable={assembleable_text}"
                         )
+                        if check_subset_h1h2_v1v2:
+                            order_txt = ','.join(subset_details.get('successful_order', []))
+                            headline += f", subset(H1,H2,V1,V2)=yes, order={order_txt}"
                         if check_assembly and assembly_search == 'dynamic' and dynamic_extra_step is not None:
                             extra_text = 'yes' if dynamic_extra_step else 'no'
                             dynamic_steps = 8 if is_assembleable else assembly_details.get('max_completed_steps', 0)
@@ -1013,8 +1105,6 @@ def main(
                         if check_assembly and assembly_trace and assembly_details and assembly_details.get('trace_steps'):
                             print_assembly_trace(assembly_details['trace_steps'])
 
-                    reached_valid_limit = max_solutions is not None and valid_count >= max_solutions
-
                     solution = {
                         "horiz_ids": horiz_ids,
                         "horiz_vars": [variant_label(v) for v in horiz_vars],
@@ -1025,6 +1115,8 @@ def main(
                         "classification": "assembleable" if is_assembleable else "valid",
                         "assembly_mode": assembly_search if check_assembly else None,
                         "assembly_details": assembly_details,
+                        "subset_h1h2_v1v2_assembleable": subset_ok,
+                        "subset_h1h2_v1v2_details": subset_details,
                         "depth1_last": last_vertical_id if has_depth_one(PIECES[last_vertical_id]) else None,
                         "last_vertical_id": last_vertical_id,
                         "iter": iter_count,
@@ -1034,6 +1126,7 @@ def main(
                     # print(json.dumps(solution, indent=2))
                     results.append(solution)
                     persist_results(save_all, results)
+                    reached_valid_limit = max_solutions is not None and len(results) >= max_solutions
                     if reached_valid_limit:
                         print(f"Reached max-solutions={max_solutions}.")
                         persist_results(save_all, results)
@@ -1053,6 +1146,7 @@ if __name__ == '__main__':
     parser.add_argument('--check-assembly', action='store_true', help='Attiva il controllo di montabilità fisica con simulazione sequence (H0,V0,H1,V1,...).')
     parser.add_argument('--assembly-check', type=str, choices=['sequence', 'dynamic'], default=None, help='Alias compatto: abilita il check assembly scegliendo la modalita.')
     parser.add_argument('--assembly-search', type=str, choices=['sequence', 'dynamic'], default='sequence', help='Modalita controllo montabilita: sequence (fissa H0,V0,...) o dynamic (ricerca ordine con backtracking).')
+    parser.add_argument('--check-subset-h1h2-v1v2', action='store_true', help='Filtra solo soluzioni in cui i soli pezzi H1,H2,V1,V2 sono montabili in almeno un ordine dei 4 pezzi.')
     parser.add_argument('--print-valid', action='store_true', help='Stampa ogni soluzione valida (non solo quelle assemblabili).')
     parser.add_argument('--assembly-trace', action='store_true', help='Stampa i limiti di movimento up/down passo-passo durante --check-assembly.')
     parser.add_argument('--max-solutions', type=int, default=1, help='Numero massimo di soluzioni da trovare prima di fermarsi (usa valori >1 per cercare piu combinazioni).')
@@ -1070,6 +1164,7 @@ if __name__ == '__main__':
         save_all=args.save_all,
         check_assembly=effective_check_assembly,
         assembly_search=effective_assembly_search,
+        check_subset_h1h2_v1v2=args.check_subset_h1h2_v1v2,
         print_valid=args.print_valid,
         assembly_trace=args.assembly_trace,
         max_solutions=args.max_solutions,
