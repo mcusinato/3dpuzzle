@@ -160,6 +160,22 @@ def _assign_v(candidates, col, used_mask, assignment, h_info, solutions):
 # VERIFICA MONTAGGIO
 # ═══════════════════════════════════════════════════════════════════════════════
 
+SHIFT_REQUIRED = {
+    (3, 3): 2,
+    (3, 2): 3,
+    (2, 2): 4,
+    (3, 1): 5,
+    (2, 1): 6,
+    (1, 1): 7,
+}
+
+DEFAULT_SEQUENCE = [
+    ('H', 0), ('V', 0),
+    ('H', 1), ('V', 1),
+    ('H', 2), ('V', 2),
+    ('H', 3), ('V', 3),
+]
+
 def get_crossing_grid(sol):
     """Calcola la griglia degli incroci con i valori di slack."""
     h_pieces = [VARIANTS_RAW[pid][var] for pid, var in sol['h']]
@@ -177,14 +193,78 @@ def get_crossing_grid(sol):
     return grid
 
 
-def check_assembly(sol):
+def _required_shift_for_notches(notches):
+    ups = [d for d, s in notches if s == 'U']
+    downs = [d for d, s in notches if s == 'D']
+    if not ups or not downs:
+        return 0
+    required = 0
+    for d_u in ups:
+        for d_d in downs:
+            key = (max(d_u, d_d), min(d_u, d_d))
+            required = max(required, SHIFT_REQUIRED[key])
+    return required
+
+
+def _shift_limits(placed_h, placed_v, h_pieces, v_pieces):
+    h_limits = {i: {'U': float('inf'), 'D': float('inf')} for i in placed_h}
+    v_limits = {j: {'U': float('inf'), 'D': float('inf')} for j in placed_v}
+
+    for i in placed_h:
+        for j in placed_v:
+            h_notch = h_pieces[i][j]
+            v_notch = v_pieces[j][i]
+            slack = h_notch[0] + v_notch[0] - 4
+            h_limits[i][h_notch[1]] = min(h_limits[i][h_notch[1]], slack)
+            v_limits[j][v_notch[1]] = min(v_limits[j][v_notch[1]], slack)
+
+    return h_limits, v_limits
+
+
+def _can_insert(piece_type, idx, placed_h, placed_v, h_pieces, v_pieces):
+    if piece_type == 'H':
+        notches = [h_pieces[idx][j] for j in placed_v]
+        required = _required_shift_for_notches(notches)
+        if required == 0:
+            return True
+        _, v_limits = _shift_limits(placed_h, placed_v, h_pieces, v_pieces)
+        can_up = all(v_limits[j]['U'] >= required for j in placed_v)
+        can_down = all(v_limits[j]['D'] >= required for j in placed_v)
+        return can_up or can_down
+
+    notches = [v_pieces[idx][i] for i in placed_h]
+    required = _required_shift_for_notches(notches)
+    if required == 0:
+        return True
+    h_limits, _ = _shift_limits(placed_h, placed_v, h_pieces, v_pieces)
+    can_up = all(h_limits[i]['U'] >= required for i in placed_h)
+    can_down = all(h_limits[i]['D'] >= required for i in placed_h)
+    return can_up or can_down
+
+
+def _sequence_is_assemblable(sol, sequence):
+    h_pieces = [VARIANTS_RAW[pid][var] for pid, var in sol['h']]
+    v_pieces = [VARIANTS_RAW[pid][var] for pid, var in sol['v']]
+
+    placed_h = set()
+    placed_v = set()
+
+    for piece_type, idx in sequence:
+        if piece_type == 'H':
+            if not _can_insert('H', idx, placed_h, placed_v, h_pieces, v_pieces):
+                return False
+            placed_h.add(idx)
+        else:
+            if not _can_insert('V', idx, placed_h, placed_v, h_pieces, v_pieces):
+                return False
+            placed_v.add(idx)
+
+    return True
+
+
+def check_assembly(sol, sequence=None):
     """
     Calcola metriche di assemblabilità per la soluzione.
-
-    In questo tipo di puzzle a griglia, il montaggio avviene intrecciando
-    i pezzi: si posano gli H e si inseriscono i V alzando temporaneamente
-    gli H dove necessario. Tutte le soluzioni geometricamente valide
-    sono montabili manualmente.
 
     Restituisce:
     - total_slack: somma di tutti gli slack (più alto = più facile)
@@ -193,11 +273,14 @@ def check_assembly(sol):
     """
     grid = get_crossing_grid(sol)
     slacks = [grid[i][j]['slack'] for i in range(4) for j in range(4)]
+    if sequence is None:
+        sequence = DEFAULT_SEQUENCE
     return {
         'total_slack': sum(slacks),
         'min_slack': min(slacks),
         'zeros': slacks.count(0),
         'max_slack': max(slacks),
+        'sequence_ok': _sequence_is_assemblable(sol, sequence),
     }
 
 
@@ -325,6 +408,8 @@ if __name__ == '__main__':
 
     # Calcola metriche
     scored = [(sol, check_assembly(sol)) for sol in unique]
+    sequence_ok_count = sum(1 for _, m in scored if m['sequence_ok'])
+    print(f"Soluzioni assemblabili con sequenza default: {sequence_ok_count}")
 
     # Seleziona soluzioni rappresentative: una per ogni suddivisione H/V
     # preferendo quella con meno incroci a slack=0
@@ -339,10 +424,7 @@ if __name__ == '__main__':
     n_show = min(5, len(representatives))
     print(f"\n{'#' * 70}")
     print(f" {n_show} SOLUZIONI RAPPRESENTATIVE (una per suddivisione H/V)")
-    print(f" Ogni soluzione geometricamente valida è montabile manualmente:")
-    print(f"   1. Posare i 4 pezzi H paralleli")
-    print(f"   2. Intrecciare i 4 pezzi V perpendicolarmente")
-    print(f"   3. Dove V deve andare sotto H, alzare H temporaneamente")
+    print(f" Verifica montaggio con sequenza: H0 V0 H1 V1 H2 V2 H3 V3")
     print(f"{'#' * 70}")
 
     for i, (sol, m, h_ids) in enumerate(representatives[:n_show], 1):
