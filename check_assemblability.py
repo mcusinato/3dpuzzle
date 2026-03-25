@@ -17,6 +17,7 @@ Logica montabilità:
 
 import json
 from typing import List, Tuple, Optional
+import puzzle_solver as ps
 
 # Definizione pezzi (da puzzle_solver.py)
 PIECES = {
@@ -192,16 +193,59 @@ def check_all_sequences(grid: dict, solution_idx: int) -> Tuple[bool, Optional[s
     valid_sequences = []
     first_detail = None
     
+    # Usa il criterio del solver principale per evitare discrepanze.
+    solver_sol = {
+        'h': tuple((grid[f'H{i}']['piece_id'], grid[f'H{i}']['variant']) for i in range(4)),
+        'v': tuple((grid[f'V{i}']['piece_id'], grid[f'V{i}']['variant']) for i in range(4)),
+    }
+
+    seq_tuples = [
+        [('H', 0), ('V', 0), ('H', 1), ('V', 1), ('H', 2), ('V', 2), ('H', 3), ('V', 3)],
+        [('V', 0), ('H', 0), ('V', 1), ('H', 1), ('V', 2), ('H', 2), ('V', 3), ('H', 3)],
+        [('H', 3), ('V', 3), ('H', 2), ('V', 2), ('H', 1), ('V', 1), ('H', 0), ('V', 0)],
+        [('V', 3), ('H', 3), ('V', 2), ('H', 2), ('V', 1), ('H', 1), ('V', 0), ('H', 0)],
+    ]
+
     for seq_idx, seq in enumerate(sequences):
-        success, detail = can_assemble(grid, seq)
-        
+        success = ps.check_assembly(solver_sol, seq_tuples[seq_idx])['sequence_ok']
+
         if first_detail is None:
-            first_detail = f"Seq {seq_idx + 1}: {detail}"
-        
+            first_detail = f"Seq {seq_idx + 1}: {'valida' if success else 'non valida'} (criterio solver)"
+
         if success:
             valid_sequences.append(f"Seq{seq_idx + 1}:{' '.join(seq)}")
     
     return len(valid_sequences) > 0, first_detail, valid_sequences
+
+
+def format_solution_line(sol_dict: dict) -> str:
+    """Rende una soluzione in una riga compatta H/V."""
+    h = ' | '.join(
+        f"H{i}=P{p['pid']}/v{p['variant']}"
+        for i, p in enumerate(sol_dict.get('h', []))
+    )
+    v = ' | '.join(
+        f"V{i}=P{p['pid']}/v{p['variant']}"
+        for i, p in enumerate(sol_dict.get('v', []))
+    )
+    return f"{h} | {v}"
+
+
+SEQUENCE_ORDERS = {
+    'Seq1': ['H0', 'V0', 'H1', 'V1', 'H2', 'V2', 'H3', 'V3'],
+    'Seq2': ['V0', 'H0', 'V1', 'H1', 'V2', 'H2', 'V3', 'H3'],
+    'Seq3': ['H3', 'V3', 'H2', 'V2', 'H1', 'V1', 'H0', 'V0'],
+    'Seq4': ['V3', 'H3', 'V2', 'H2', 'V1', 'H1', 'V0', 'H0'],
+}
+
+
+def position_notches(sol_dict: dict, pos: str) -> str:
+    """Restituisce le tacche della posizione (es. H0/V2) come stringa [3U 2D ...]."""
+    axis = pos[0]
+    idx = int(pos[1])
+    piece = sol_dict['h'][idx] if axis == 'H' else sol_dict['v'][idx]
+    notches = get_piece_notches(piece['pid'], piece['variant'])
+    return ' '.join(f"{d}{s}" for d, s in notches)
 
 
 def main():
@@ -236,12 +280,17 @@ def main():
     
     if assemblable:
         print(f"\n✓✓✓ TROVATE {len(assemblable)} SOLUZIONE(I) MONTABILE(I)! ✓✓✓")
-        for sol_idx, sol, seqs in assemblable[:3]:  # Mostra prime 3
-            print(f"\n  Soluzione {sol_idx}:")
-            print(f"    Sequenze valide: {seqs}")
-            for pos in ['H0', 'H1', 'H2', 'H3', 'V0', 'V1', 'V2', 'V3']:
-                if pos in sol:
-                    print(f"      {pos}: {sol[pos]}")
+        print("\nDettaglio semplice (ordine sequenza valida):")
+        print("-" * 80)
+        for sol_idx, sol, seqs in assemblable:
+            print(f"Soluzione {sol_idx}:")
+            for seq in seqs:
+                seq_name = seq.split(':', 1)[0]
+                order = SEQUENCE_ORDERS.get(seq_name, [])
+                print(f"  {seq_name}:")
+                for pos in order:
+                    print(f"    {pos}:[{position_notches(sol, pos)}]")
+            print("-" * 80)
     else:
         print("\n✗ Nessuna soluzione è montabile con le 4 sequenze testate.")
     

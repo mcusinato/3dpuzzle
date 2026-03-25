@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Stampa la soluzione 62."""
+"""Stampa la soluzione 62 e verifica la montabilita con il criterio del solver."""
 
 import json
+import puzzle_solver as ps
 
 # Definizione pezzi
 PIECES = {
@@ -37,8 +38,26 @@ with open('puzzle_solutions_unique_geometric.json', 'r') as f:
 sol = data['solutions'][62]
 
 print('=' * 90)
-print(' SOLUZIONE 62 (MONTABILE CON TUTTE 4 SEQUENZE)')
+print(' SOLUZIONE 62 (VERIFICA MONTABILITA)')
 print('=' * 90)
+print()
+
+solver_sol = {
+    'h': tuple((p['pid'], p['variant']) for p in sol['h']),
+    'v': tuple((p['pid'], p['variant']) for p in sol['v']),
+}
+
+sequences = [
+    ('Seq1', [('H', 0), ('V', 0), ('H', 1), ('V', 1), ('H', 2), ('V', 2), ('H', 3), ('V', 3)]),
+    ('Seq2', [('V', 0), ('H', 0), ('V', 1), ('H', 1), ('V', 2), ('H', 2), ('V', 3), ('H', 3)]),
+    ('Seq3', [('H', 3), ('V', 3), ('H', 2), ('V', 2), ('H', 1), ('V', 1), ('H', 0), ('V', 0)]),
+    ('Seq4', [('V', 3), ('H', 3), ('V', 2), ('H', 2), ('V', 1), ('H', 1), ('V', 0), ('H', 0)]),
+]
+
+print('Esito montabilita (criterio solver):')
+for name, seq in sequences:
+    ok = ps.check_assembly(solver_sol, seq)['sequence_ok']
+    print(f'  {name}: {"MONTABILE" if ok else "NON MONTABILE"}')
 print()
 
 # Stampa il testo della soluzione se disponibile

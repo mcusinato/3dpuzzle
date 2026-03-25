@@ -221,25 +221,134 @@ def _shift_limits(placed_h, placed_v, h_pieces, v_pieces):
     return h_limits, v_limits
 
 
+def _pair_required_shift(notch_a, notch_b):
+    """Shift minimo richiesto tra due tacche con direzioni opposte."""
+    d1, s1 = notch_a
+    d2, s2 = notch_b
+    if s1 == s2:
+        return 0
+    key = (max(d1, d2), min(d1, d2))
+    return SHIFT_REQUIRED[key]
+
+
+def _feasible_relative_shift(notches_by_idx, limits_by_idx, orientation=0):
+    """
+    Verifica se esiste una configurazione di shift relativa dei pezzi ortogonali
+    che consente l'inserimento del nuovo pezzo senza rimuovere pezzi gia montati.
+
+    Ogni pezzo i ha uno shift xi entro i limiti [ -D_i, U_i ].
+    Per ogni coppia di tacche opposte (U,D) deve valere una separazione minima
+    pari a SHIFT_REQUIRED(depth_U, depth_D).
+
+    orientation:
+    - +1: inserimento in verso diretto (U sopra D)
+    - -1: inserimento in verso opposto (D sopra U)
+    -  0: entrambi (fallback)
+    """
+    items = [(idx, notches_by_idx[idx]) for idx in sorted(notches_by_idx.keys())]
+    if len(items) <= 1:
+        return True
+
+    constraints = []
+    max_req = 0
+    for a in range(len(items)):
+        idx_a, notch_a = items[a]
+        for b in range(a + 1, len(items)):
+            idx_b, notch_b = items[b]
+            req = _pair_required_shift(notch_a, notch_b)
+            if req > 0:
+                constraints.append((idx_a, idx_b, notch_a[1], notch_b[1], req))
+                max_req = max(max_req, req)
+
+    if not constraints:
+        return True
+
+    finite_limits = []
+    for idx, _ in items:
+        u = limits_by_idx[idx]['U']
+        d = limits_by_idx[idx]['D']
+        if u != float('inf'):
+            finite_limits.append(u)
+        if d != float('inf'):
+            finite_limits.append(d)
+    max_finite = max(finite_limits) if finite_limits else 0
+
+    cap = max_req + max_finite + 1
+    bounds = {}
+    for idx, _ in items:
+        u = limits_by_idx[idx]['U']
+        d = limits_by_idx[idx]['D']
+        lo = -cap if d == float('inf') else -int(d)
+        hi = cap if u == float('inf') else int(u)
+        bounds[idx] = (lo, hi)
+
+    indices = [idx for idx, _ in items]
+
+    def satisfies_partial(assign, orient):
+        for ia, ib, sa, sb, req in constraints:
+            if ia not in assign or ib not in assign:
+                continue
+
+            xa = assign[ia]
+            xb = assign[ib]
+
+            if orient == 1:
+                if sa == 'U' and sb == 'D' and xa - xb < req:
+                    return False
+                if sa == 'D' and sb == 'U' and xb - xa < req:
+                    return False
+            else:
+                if sa == 'U' and sb == 'D' and xb - xa < req:
+                    return False
+                if sa == 'D' and sb == 'U' and xa - xb < req:
+                    return False
+        return True
+
+    def search(pos, assign, orient):
+        if pos == len(indices):
+            return True
+        idx = indices[pos]
+        lo, hi = bounds[idx]
+        for value in range(lo, hi + 1):
+            assign[idx] = value
+            if satisfies_partial(assign, orient) and search(pos + 1, assign, orient):
+                return True
+        assign.pop(idx, None)
+        return False
+
+    if orientation == 1:
+        return search(0, {}, 1)
+    if orientation == -1:
+        return search(0, {}, -1)
+    return search(0, {}, 1) or search(0, {}, -1)
+
+
+def _insertion_orientation(idx, placed_same_axis):
+    """Deduce il verso di inserimento dalla progressione degli indici nella sequenza."""
+    if not placed_same_axis:
+        return 0
+    if idx > max(placed_same_axis):
+        return 1
+    if idx < min(placed_same_axis):
+        return -1
+    return 0
+
+
 def _can_insert(piece_type, idx, placed_h, placed_v, h_pieces, v_pieces):
     if piece_type == 'H':
-        notches = [h_pieces[idx][j] for j in placed_v]
-        required = _required_shift_for_notches(notches)
-        if required == 0:
+        if not placed_v:
             return True
         _, v_limits = _shift_limits(placed_h, placed_v, h_pieces, v_pieces)
-        can_up = all(v_limits[j]['U'] >= required for j in placed_v)
-        can_down = all(v_limits[j]['D'] >= required for j in placed_v)
-        return can_up or can_down
+        notches_by_v = {j: h_pieces[idx][j] for j in placed_v}
+        orient = _insertion_orientation(idx, placed_h)
+        return _feasible_relative_shift(notches_by_v, v_limits, orient)
 
-    notches = [v_pieces[idx][i] for i in placed_h]
-    required = _required_shift_for_notches(notches)
-    if required == 0:
+    if not placed_h:
         return True
     h_limits, _ = _shift_limits(placed_h, placed_v, h_pieces, v_pieces)
-    can_up = all(h_limits[i]['U'] >= required for i in placed_h)
-    can_down = all(h_limits[i]['D'] >= required for i in placed_h)
-    return can_up or can_down
+    notches_by_h = {i: v_pieces[idx][i] for i in placed_h}
+    orient = _insertion_orientation(idx, placed_v)
+    return _feasible_relative_shift(notches_by_h, h_limits, orient)
 
 
 def _sequence_is_assemblable(sol, sequence):

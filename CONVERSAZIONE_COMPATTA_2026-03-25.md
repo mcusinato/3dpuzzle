@@ -1,93 +1,46 @@
-# Conversazione 2026-03-25: Montabilità delle Soluzioni Geometriche
+# Conversazione Compatta 2026-03-25
 
-## Riassunto Esecutivo
+## Obiettivo
 
-Abbiamo verificato la montabilità delle **376 soluzioni geometriche uniche** del puzzle 3D.
+Verificare la montabilita reale delle soluzioni geometriche del puzzle, eliminando i falsi positivi del checker semplificato.
 
-### Risultati Principali
+## Cosa e stato fatto
 
-**Delle 376 soluzioni geometriche uniche: 82 sono montabili (21.8%)**
+1. Analisi della soluzione 62 con descrizione fisica del montaggio passo-passo.
+2. Confronto tra checker: emersa discrepanza tra logica semplificata e solver.
+3. Allineamento degli script al criterio del solver principale.
+4. Revisione del criterio di inserimento nel solver per gestire meglio i vincoli di shift.
+5. Introduzione del vincolo di orientazione coerente con la progressione della sequenza.
+6. Semplificazione output di stampa delle soluzioni montabili in ordine di sequenza valida.
 
-| Metrica | Valore |
-|---------|--------|
-| Soluzioni totali | 376 |
-| Soluzioni montabili | **82** |
-| Soluzioni non montabili | 294 |
-| Percentuale montabili | **21.8%** |
+## Risultati finali
 
-## Metodologia di Verifica
+- Soluzioni totali testate: 376
+- Soluzioni montabili: 17
+- Soluzioni non montabili: 359
+- La soluzione 62 e NON montabile in tutte e 4 le sequenze standard.
 
-### Sequenze di Montaggio Testate
+## Verifiche chiave
 
-Per ogni soluzione sono state testate 4 sequenze di montaggio:
-1. **Seq1**: H0 V0 H1 V1 H2 V2 H3 V3
-2. **Seq2**: V0 H0 V1 H1 V2 H2 V3 H3
-3. **Seq3**: H3 V3 H2 V2 H1 V1 H0 V0 (inversa della 1)
-4. **Seq4**: V3 H3 V2 H2 V1 H1 V0 H0 (inversa della 2)
+- Caso 62: confermata non montabilita con criterio aggiornato.
+- Caso 184: confermato blocco in Seq1 al passo V2, coerente con analisi manuale.
 
-### Logica di Montabilità
+## File modificati
 
-- **Primi 3 pezzi**: sempre montabili (geometricamente compatibili)
-- **Da 4° pezzo in poi**: si inserisce nel 2° buco dei pezzi ortogonali
-  - **Stessa direzione**: inseribile dal lato libero ✓
-  - **Direzioni opposte**: richiede shift uniformi (profondità uguali)
-    - Se profondità incoerenti: **NON montabile** ✗
+- check_assemblability.py
+  - usa il criterio del solver
+  - stampa le montabili in formato semplice, in ordine della sequenza valida (H0:[...], V0:[...], ...)
+- puzzle_solver.py
+  - raffinata la logica di _can_insert/_feasible_relative_shift
+  - aggiunto vincolo sul verso di inserimento dedotto dalla progressione degli indici
+- print_solution_62.py
+  - verifica reale delle 4 sequenze invece di testo hardcoded
 
-### Cause di Non Montabilità
+## Elenco montabili (indici)
 
-Le 294 soluzioni non montabili falliscono tipicamente al 3°-6° pezzo perché:
-- Pezzi ortogonali hanno profondità del 2° buco incompatibili per lo shift
-- Esempio: H0 ha profondità 3, H1 ha profondità 2 → scorrimento impossibile
+208, 209, 210, 211, 212, 213, 214, 215, 240, 241, 242, 243, 246, 252, 253, 254, 255
 
-## Risultati Dettagliati per Sequenza
+## Note
 
-| Sequenza | Soluzioni che funzionano |
-|----------|--------------------------|
-| Seq1 (H-first) | ~60+ soluzioni |
-| Seq2 (V-first) | ~50+ soluzioni |
-| Seq3 (H-reverse) | ~50+ soluzioni |
-| Seq4 (V-reverse) | ~40+ soluzioni |
-
-**Nota**: Numeri approssimativi; alcune soluzioni funzionano con multiple sequenze.
-
-## Soluzioni "Super-Montabili"
-
-Alcune soluzioni funzionano con **TUTTE 4 sequenze**:
-- Soluzione 62
-- Soluzione 91
-- Soluzione 93
-- Soluzione 106
-- Soluzione 108
-- Soluzione 263
-- Soluzione 286
-
-Totale: **7 soluzioni super-montabili**
-
-### Esempio: Soluzione 62
-
-```
-H0=P1/v1:[2D 2D 3D 3U] | H1=P5/v2:[3U 2U 3D 2D] | H2=P2/v0:[1D 2U 1U 3U] | H3=P3/v3:[2U 2U 2U 3D] | 
-V0=P4/v0:[2U 2D 3U 3D] | V1=P7/v0:[3U 2D 2D 2D] | V2=P6/v3:[3U 2U 3D 2D] | V3=P8/v0:[2D 2U 3D 3U]
-```
-
-- ✅ Seq1, ✅ Seq2, ✅ Seq3, ✅ Seq4
-
-## File Generati/Modificati
-
-1. **check_assemblability.py** - Script di verifica montabilità
-2. **print_solution_62.py** - Script per stampare soluzione dettagliata
-3. **puzzle_solutions_unique_geometric.json** - Soluzioni (invariato)
-
-## Conclusioni
-
-1. ✅ **Esiste almeno una soluzione montabile** (82 in totale)
-2. ✅ **Esistono soluzioni "super-montabili"** (7 con tutte le sequenze)
-3. ✅ **La logica di shift** è robusta e spiega i fallimenti
-4. ⚠️ **78.2% delle soluzioni** non è montabile con alcuna sequenza
-
-## Prossimi Passi Possibili
-
-- [ ] Cercare sequenze di montaggio alternative (non solo H/V first)
-- [ ] Verificare se lo shift parziale è possibile
-- [ ] Analizzare i pattern comuni nelle 82 soluzioni montabili
-- [ ] Validare fisicamente la soluzione 62 (o altre super-montabili)
+- In working tree risulta modificato anche puzzle_solutions_unique_geometric.json.
+- Nessun errore di lint/sintassi nei file Python aggiornati.
